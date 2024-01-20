@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{env, io};
 
 use jni_loader::{locate, JNI};
 
@@ -11,9 +11,17 @@ fn find_libc() {
 }
 
 #[test]
-fn spotify() {
-    let Ok(jni) = JNI::new(PathBuf::from("./liborbit-jni-spotify-8.8.96-x86_64.so")) else {
-        println!("Failed to load Spotify JNI, download from https://drive.proton.me/urls/RJX1MDD6KG#VrZCZk72EmBL");
-        return;
+fn native_library() -> io::Result<()> {
+    let path = env::current_dir()?.join("tests").join("native-lib.so");
+    let lib = match JNI::new(path.clone()) {
+        Ok(lib) => lib,
+        Err(err) => match err {
+            jni_loader::Error::FileNotFound => {
+                panic!("Expected to find shared library at {:?}, please run build-native.sh", path);
+            },
+            _ => panic!("Error when loading library: {:?}", err),
+        },
     };
+
+    Ok(())
 }

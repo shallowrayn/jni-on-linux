@@ -1,3 +1,5 @@
+[workspace]
+
 [package]
 name = "jni-loader"
 edition = "2021"
@@ -10,4 +12,8 @@ exclude = ["test"]
 
 [dependencies]
 auxv = "0.3.3"
+elf = "0.7.4"
 thiserror = "1.0.56"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.27.1", features = ["mman", "feature"] }
