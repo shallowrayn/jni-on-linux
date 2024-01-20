@@ -1,0 +1,13 @@
+[package]
+name = "jni-loader"
+edition = "2021"
+version = "0.1.0"
+authors = ["shallowrain"]
+description = "Load Android shared libraries on Linux"
+license = "MIT"
+repository = "https://github.com/shallowrayn/jni-on-linux"
+exclude = ["test"]
+
+[dependencies]
+auxv = "0.3.3"
+thiserror = "1.0.56"
