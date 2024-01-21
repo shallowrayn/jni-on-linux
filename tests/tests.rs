@@ -13,7 +13,7 @@ fn find_libc() {
 #[test]
 fn native_library() -> io::Result<()> {
     let path = env::current_dir()?.join("tests").join("native-lib.so");
-    let lib = match JNI::new(path.clone()) {
+    let mut lib = match JNI::new(path.clone()) {
         Ok(lib) => lib,
         Err(err) => match err {
             jni_loader::Error::FileNotFound => {
@@ -22,6 +22,7 @@ fn native_library() -> io::Result<()> {
             _ => panic!("Error when loading library: {:?}", err),
         },
     };
+    lib.load_dependencies();
 
     Ok(())
 }
