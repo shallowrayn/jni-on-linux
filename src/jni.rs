@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs::File, path::PathBuf, rc::Rc};
+use std::{collections::HashMap, fs::File, path::PathBuf, rc::Rc, sync::Mutex};
 
 use elf::{
     abi::{DT_NEEDED, DT_RUNPATH, ET_DYN},
@@ -13,7 +13,7 @@ pub struct JNI {
     path: PathBuf,
     elf_file: ElfStream<AnyEndian, File>,
     mapping: MemoryMapping,
-    dependencies: HashMap<String, Option<Rc<JNI>>>,
+    dependencies: HashMap<String, Option<Rc<Mutex<JNI>>>>,
     loaded_dependencies: bool,
 }
 
@@ -49,7 +49,11 @@ impl JNI {
         }
     }
 
-    pub fn add_dependency(&mut self, name: &str, lib: Option<Rc<JNI>>) {
+    pub fn add_dependency(&mut self, name: &str, lib: Option<JNI>) {
+        self.dependencies.insert(name.to_string(), lib.map(Mutex::new).map(Rc::new));
+    }
+
+    pub fn add_shared_dependency(&mut self, name: &str, lib: Option<Rc<Mutex<JNI>>>) {
         self.dependencies.insert(name.to_string(), lib);
     }
 
@@ -100,7 +104,7 @@ impl JNI {
             }
             match locate::locate_library_internal(&lib_name, None, parent_dir.clone(), dt_runpath.clone()) {
                 Some(lib_path) => {
-                    self.dependencies.insert(lib_name, JNI::new(lib_path).ok().map(Rc::new));
+                    self.dependencies.insert(lib_name, JNI::new(lib_path).ok().map(Mutex::new).map(Rc::new));
                 },
                 None => {
                     self.dependencies.insert(lib_name, None);
