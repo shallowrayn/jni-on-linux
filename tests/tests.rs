@@ -22,7 +22,9 @@ fn native_library() -> io::Result<()> {
             _ => panic!("Error when loading library: {:?}", err),
         },
     };
+    lib.add_dependency("libc.so.6", None);
     lib.load_dependencies();
+    lib.initialize();
 
     Ok(())
 }
