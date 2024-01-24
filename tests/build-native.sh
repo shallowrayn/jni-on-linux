@@ -1,1 +1,1 @@
-gcc native-lib.c -shared -fPIC -o native-lib.so
+gcc native-lib.c -shared -fno-plt -o native-lib.so

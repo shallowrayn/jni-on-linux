@@ -19,8 +19,11 @@ pub struct JNI {
     dependencies: HashMap<String, Option<Rc<Mutex<JNI>>>>,
     loaded_dependencies: bool,
     have_been_initialized: bool,
+    symbol_overrides: HashMap<String, Option<usize>>,
     looking_for_symbol: bool,
 }
+
+const UNDEFINED_SYMBOL_VALUE: usize = 0xBABECAFE;
 
 impl JNI {
     pub fn new(path: PathBuf) -> Result<Self, Error> {
@@ -52,6 +55,7 @@ impl JNI {
             dependencies: HashMap::new(),
             loaded_dependencies: false,
             have_been_initialized: false,
+            symbol_overrides: HashMap::new(),
             looking_for_symbol: false,
         })
     }
@@ -127,6 +131,20 @@ impl JNI {
         }
     }
 
+    pub fn override_symbol(&mut self, symbol_name: &str, new_value: Option<*const ()>) {
+        self.symbol_overrides.insert(symbol_name.to_owned(), new_value.map(|v| v as usize));
+    }
+
+    pub fn get_symbol(&mut self, symbol_name: &str) -> Option<(*const (), u64)> {
+        let mut symbol = self.find_local_symbol_by_name(symbol_name, false);
+        if symbol.is_none() {
+            symbol = self.find_global_symbol(symbol_name, false);
+        }
+        symbol.map(|symbol| {
+            ((self.mapping.base + symbol.value as usize - self.base_virtual_address) as *const (), symbol.size)
+        })
+    }
+
     pub fn initialize(&mut self) {
         if self.have_been_initialized {
             return;
@@ -193,18 +211,18 @@ impl JNI {
                 ($reloc:expr) => {{
                     let symbol = if relocation.symbol != 0 {
                         let local_symbol =
-                            self.find_local_symbol_by_index(relocation.symbol).expect("Failed to find symbol");
-                        if local_symbol.value != 0 {
+                            self.find_local_symbol_by_index(relocation.symbol, true).expect("Failed to find symbol");
+                        if local_symbol.address != 0 {
                             Some(local_symbol)
                         } else {
                             let symbol_name = local_symbol.name.expect("Cannot lookup symbol without name");
-                            self.find_global_symbol(&symbol_name)
+                            self.find_global_symbol(&symbol_name, true)
                         }
                     } else {
                         None
                     };
                     match symbol {
-                        Some(s) => self.mapping.base + s.value as usize - self.base_virtual_address,
+                        Some(s) => s.address,
                         None => panic!("Reloc {} failed to find symbol", $reloc),
                     }
                 }};
@@ -252,18 +270,28 @@ impl JNI {
     }
 
     // Look for a local symbol using its index
-    fn find_local_symbol_by_index(&mut self, index: u32) -> Option<LinkingSymbol> {
+    fn find_local_symbol_by_index(&mut self, index: u32, include_overrides: bool) -> Option<LinkingSymbol> {
         let (symbol_table, symbol_string_table) = self.elf_file.dynamic_symbol_table().ok()??;
         let symbol = symbol_table.get(index as usize).ok()?;
         let mut symbol_name = None;
         if symbol.st_name != 0 {
-            symbol_name = Some(symbol_string_table.get(symbol.st_name as usize).ok()?.to_owned());
+            let sym_name = symbol_string_table.get(symbol.st_name as usize).ok()?.to_owned();
+            if include_overrides {
+                if let Some(&overridden_value) = self.symbol_overrides.get(&sym_name) {
+                    let address = match overridden_value {
+                        Some(value) => value,
+                        None => UNDEFINED_SYMBOL_VALUE,
+                    };
+                    return Some(LinkingSymbol::from_override(&symbol, Some(sym_name), address));
+                }
+            }
+            symbol_name = Some(sym_name);
         }
-        Some(LinkingSymbol::from(&symbol, symbol_name))
+        Some(LinkingSymbol::from(&symbol, symbol_name, self.mapping.base, self.base_virtual_address))
     }
 
     // Look for a local symbol using the hash tables
-    fn find_local_symbol_by_name(&mut self, symbol_name: &str) -> Option<LinkingSymbol> {
+    fn find_local_symbol_by_name(&mut self, symbol_name: &str, include_overrides: bool) -> Option<LinkingSymbol> {
         // Check .gnu.hash first as it is faster
         if let Ok(Some(&gnu_hash_section_header)) = self.elf_file.section_header_by_name(".gnu.hash") {
             let elf_endianness = self.elf_file.ehdr.endianness;
@@ -276,7 +304,21 @@ impl JNI {
             if let Some((_, symbol)) =
                 hash_section.find(symbol_name.as_bytes(), &symbol_table, &symbol_string_table).ok()?
             {
-                return Some(LinkingSymbol::from(&symbol, Some(symbol_name.to_owned())));
+                if include_overrides {
+                    if let Some(&overridden_value) = self.symbol_overrides.get(symbol_name) {
+                        let address = match overridden_value {
+                            Some(value) => value,
+                            None => UNDEFINED_SYMBOL_VALUE,
+                        };
+                        return Some(LinkingSymbol::from_override(&symbol, Some(symbol_name.to_owned()), address));
+                    }
+                }
+                return Some(LinkingSymbol::from(
+                    &symbol,
+                    Some(symbol_name.to_owned()),
+                    self.mapping.base,
+                    self.base_virtual_address,
+                ));
             }
         }
 
@@ -291,7 +333,21 @@ impl JNI {
             if let Some((_, symbol)) =
                 hash_section.find(symbol_name.as_bytes(), &symbol_table, &symbol_string_table).ok()?
             {
-                return Some(LinkingSymbol::from(&symbol, Some(symbol_name.to_owned())));
+                if include_overrides {
+                    if let Some(&overridden_value) = self.symbol_overrides.get(symbol_name) {
+                        let address = match overridden_value {
+                            Some(value) => value,
+                            None => UNDEFINED_SYMBOL_VALUE,
+                        };
+                        return Some(LinkingSymbol::from_override(&symbol, Some(symbol_name.to_owned()), address));
+                    }
+                }
+                return Some(LinkingSymbol::from(
+                    &symbol,
+                    Some(symbol_name.to_owned()),
+                    self.mapping.base,
+                    self.base_virtual_address,
+                ));
             }
         }
 
@@ -301,7 +357,13 @@ impl JNI {
     }
 
     // Loop through our dependencies looking for a symbol
-    fn find_global_symbol(&mut self, symbol_name: &str) -> Option<LinkingSymbol> {
+    // NOTE: This implementation is technically wrong, the spec says that the executable should be searched, then the
+    //       symbols defined in the shared library, then the symbols in DT_NEEDED, then the DT_NEEDED of the first
+    //       DT_NEEDED:                 1           JNI (ignore the executable consuming this library)
+    //                              2-------3       JNI's DT_NEEDED
+    //                            4---5     6       Each DT_NEEDED's dependencies
+    //                                    7---8     And so on, descending the tree level by level
+    fn find_global_symbol(&mut self, symbol_name: &str, include_overrides: bool) -> Option<LinkingSymbol> {
         if self.looking_for_symbol {
             return None;
         }
@@ -310,8 +372,9 @@ impl JNI {
             if let Some(dependency) = dependency {
                 // looking_for_symbol protects us from recursively calling lock()
                 let mut dependency = dependency.lock().unwrap();
-                let symbol =
-                    dependency.find_local_symbol_by_name(symbol_name).or(dependency.find_global_symbol(symbol_name));
+                let symbol = dependency
+                    .find_local_symbol_by_name(symbol_name, include_overrides)
+                    .or(dependency.find_global_symbol(symbol_name, include_overrides));
                 if symbol.is_some() {
                     return symbol;
                 }
@@ -320,15 +383,6 @@ impl JNI {
         self.looking_for_symbol = false;
         None
     }
-
-    // First check our symbols, then look through dependencies
-    fn find_symbol_by_name(&mut self, symbol_name: &str) -> Option<LinkingSymbol> {
-        let symbol = self.find_local_symbol_by_name(symbol_name);
-        if symbol.is_some() {
-            return symbol;
-        }
-        self.find_global_symbol(symbol_name)
-    }
 }
 
 // Used to represent a symbol while linking
@@ -336,6 +390,7 @@ struct LinkingSymbol {
     name: Option<String>,
     shndx: u16,
     value: u64,
+    address: usize,
     size: u64,
     sym_type: u8,
     binding: u8,
@@ -343,11 +398,25 @@ struct LinkingSymbol {
 }
 
 impl LinkingSymbol {
-    pub fn from(symbol: &Symbol, name: Option<String>) -> Self {
+    pub fn from(symbol: &Symbol, name: Option<String>, module_base: usize, base_virtual_addr: usize) -> Self {
         LinkingSymbol {
             name,
             shndx: symbol.st_shndx,
             value: symbol.st_value,
+            address: module_base + symbol.st_value as usize - base_virtual_addr,
+            size: symbol.st_size,
+            sym_type: symbol.st_symtype(),
+            binding: symbol.st_bind(),
+            visibility: symbol.st_vis(),
+        }
+    }
+
+    pub fn from_override(symbol: &Symbol, name: Option<String>, address: usize) -> Self {
+        LinkingSymbol {
+            name,
+            shndx: symbol.st_shndx,
+            value: symbol.st_value,
+            address,
             size: symbol.st_size,
             sym_type: symbol.st_symtype(),
             binding: symbol.st_bind(),

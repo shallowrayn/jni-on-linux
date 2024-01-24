@@ -10,6 +10,10 @@ fn find_libc() {
     };
 }
 
+extern "C" fn add2(a: std::ffi::c_int, b: std::ffi::c_int) -> std::ffi::c_int {
+    a + b
+}
+
 #[test]
 fn native_library() -> io::Result<()> {
     let path = env::current_dir()?.join("tests").join("native-lib.so");
@@ -24,7 +28,16 @@ fn native_library() -> io::Result<()> {
     };
     lib.add_dependency("libc.so.6", None);
     lib.load_dependencies();
+    lib.override_symbol("_ITM_deregisterTMCloneTable", None);
+    lib.override_symbol("__gmon_start__", None);
+    lib.override_symbol("_ITM_registerTMCloneTable", None);
+    lib.override_symbol("__cxa_finalize", None);
+    lib.override_symbol("add2", Some(add2 as *const ()));
     lib.initialize();
+
+    let (test_add2, _) = lib.get_symbol("test_add2").unwrap();
+    let test_add2: extern "C" fn() -> std::ffi::c_int = unsafe { std::mem::transmute(test_add2) };
+    assert_eq!(3 + 3, test_add2());
 
     Ok(())
 }
