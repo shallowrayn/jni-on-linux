@@ -4,6 +4,7 @@ use elf::{
     abi::{DT_NEEDED, DT_RUNPATH, ET_DYN, PT_LOAD},
     endian::AnyEndian,
     hash::{GnuHashTable, SysVHashTable},
+    relocation::{Rel, Rela},
     symbol::Symbol,
     ElfStream,
 };
@@ -169,38 +170,28 @@ impl JNI {
         // meaning no assembly.
         //
         // [1] https://maskray.me/blog/2021-10-31-relative-relocations-and-relr
-        struct Relocation {
-            offset: usize,
-            rel_type: u32,
-            symbol: u32,
-            addend: i64,
-        }
         let mut relocations = Vec::new();
-        if let Ok(Some(rel_dyn_header)) = self.elf_file.section_header_by_name(".rel.dyn") {
-            let rel_dyn_header = *rel_dyn_header;
+        if let Ok(Some(&rel_dyn_header)) = self.elf_file.section_header_by_name(".rel.dyn") {
             if let Ok(rel_dyn) = self.elf_file.section_data_as_rels(&rel_dyn_header) {
-                for relocation in rel_dyn {
-                    let reloc = Relocation {
-                        offset: relocation.r_offset as usize,
-                        rel_type: relocation.r_type,
-                        symbol: relocation.r_sym,
-                        addend: 0,
-                    };
-                    relocations.push(reloc);
-                }
+                relocations.extend(rel_dyn.map(Relocation::from));
             }
         }
-        if let Ok(Some(rela_dyn_header)) = self.elf_file.section_header_by_name(".rela.dyn") {
-            let rela_dyn_header = *rela_dyn_header;
+        if let Ok(Some(&rela_dyn_header)) = self.elf_file.section_header_by_name(".rela.dyn") {
             if let Ok(rela_dyn) = self.elf_file.section_data_as_relas(&rela_dyn_header) {
-                for relocation in rela_dyn {
-                    let reloc = Relocation {
-                        offset: relocation.r_offset as usize,
-                        rel_type: relocation.r_type,
-                        symbol: relocation.r_sym,
-                        addend: relocation.r_addend,
-                    };
-                    relocations.push(reloc);
+                relocations.extend(rela_dyn.map(Relocation::from));
+            }
+        }
+        // Without inline assembly we don't have a PLT trampoline. Resolve all PLT entries now
+        #[cfg(not(feature = "inline-asm"))]
+        {
+            if let Ok(Some(&rel_plt_header)) = self.elf_file.section_header_by_name(".rel.plt") {
+                if let Ok(rel_plt) = self.elf_file.section_data_as_rels(&rel_plt_header) {
+                    relocations.extend(rel_plt.map(Relocation::from));
+                }
+            }
+            if let Ok(Some(&rela_plt_header)) = self.elf_file.section_header_by_name(".rela.plt") {
+                if let Ok(rela_plt) = self.elf_file.section_data_as_relas(&rela_plt_header) {
+                    relocations.extend(rela_plt.map(Relocation::from));
                 }
             }
         }
@@ -278,10 +269,7 @@ impl JNI {
             let sym_name = symbol_string_table.get(symbol.st_name as usize).ok()?.to_owned();
             if include_overrides {
                 if let Some(&overridden_value) = self.symbol_overrides.get(&sym_name) {
-                    let address = match overridden_value {
-                        Some(value) => value,
-                        None => UNDEFINED_SYMBOL_VALUE,
-                    };
+                    let address = overridden_value.unwrap_or(UNDEFINED_SYMBOL_VALUE);
                     return Some(LinkingSymbol::from_override(&symbol, Some(sym_name), address));
                 }
             }
@@ -306,10 +294,7 @@ impl JNI {
             {
                 if include_overrides {
                     if let Some(&overridden_value) = self.symbol_overrides.get(symbol_name) {
-                        let address = match overridden_value {
-                            Some(value) => value,
-                            None => UNDEFINED_SYMBOL_VALUE,
-                        };
+                        let address = overridden_value.unwrap_or(UNDEFINED_SYMBOL_VALUE);
                         return Some(LinkingSymbol::from_override(&symbol, Some(symbol_name.to_owned()), address));
                     }
                 }
@@ -335,10 +320,7 @@ impl JNI {
             {
                 if include_overrides {
                     if let Some(&overridden_value) = self.symbol_overrides.get(symbol_name) {
-                        let address = match overridden_value {
-                            Some(value) => value,
-                            None => UNDEFINED_SYMBOL_VALUE,
-                        };
+                        let address = overridden_value.unwrap_or(UNDEFINED_SYMBOL_VALUE);
                         return Some(LinkingSymbol::from_override(&symbol, Some(symbol_name.to_owned()), address));
                     }
                 }
@@ -382,6 +364,28 @@ impl JNI {
         }
         self.looking_for_symbol = false;
         None
+    }
+}
+
+struct Relocation {
+    offset: usize,
+    rel_type: u32,
+    symbol: u32,
+    addend: i64,
+}
+impl From<Rel> for Relocation {
+    fn from(relocation: Rel) -> Self {
+        Self { offset: relocation.r_offset as usize, rel_type: relocation.r_type, symbol: relocation.r_sym, addend: 0 }
+    }
+}
+impl From<Rela> for Relocation {
+    fn from(relocation: Rela) -> Self {
+        Self {
+            offset: relocation.r_offset as usize,
+            rel_type: relocation.r_type,
+            symbol: relocation.r_sym,
+            addend: relocation.r_addend,
+        }
     }
 }
 

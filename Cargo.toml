@@ -10,6 +10,10 @@ license = "MIT"
 repository = "https://github.com/shallowrayn/jni-on-linux"
 exclude = ["test"]
 
+[features]
+default = ["inline-asm"]
+inline-asm = []
+
 [dependencies]
 auxv = "0.3.3"
 elf = "0.7.4"
