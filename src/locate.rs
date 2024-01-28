@@ -1,9 +1,14 @@
-use std::{env, fs, path::PathBuf};
+use std::{
+    env,
+    fs::{self, File},
+    path::PathBuf,
+};
 #[cfg(target_os = "linux")]
 use std::{ffi::CStr, os::raw::c_char};
 
 #[cfg(target_os = "linux")]
 use auxv::getauxval::Getauxval;
+use elf::{endian::AnyEndian, ElfStream};
 use log::trace;
 
 /// Search for a library using ld.so's search order. Custom search paths can
@@ -81,7 +86,12 @@ fn check_directory(name: &str, directory: PathBuf) -> Option<PathBuf> {
     let mut file_path = directory.clone();
     file_path.push(name);
     if file_path.exists() {
-        return Some(file_path);
+        if let Ok(file) = File::open(file_path.clone()) {
+            match ElfStream::<AnyEndian, _>::open_stream(file) {
+                Ok(_) => return Some(file_path),
+                Err(error) => trace!("Ignoring {:?}: {error}", file_path),
+            }
+        }
     }
 
     if !directory.is_dir() {
@@ -94,8 +104,14 @@ fn check_directory(name: &str, directory: PathBuf) -> Option<PathBuf> {
         }
         let mut file_path = path;
         file_path.push(name);
-        if file_path.exists() {
-            return Some(file_path);
+        if !file_path.exists() {
+            continue;
+        }
+        if let Ok(file) = File::open(file_path.clone()) {
+            match ElfStream::<AnyEndian, _>::open_stream(file) {
+                Ok(_) => return Some(file_path),
+                Err(error) => trace!("Ignoring {:?}: {error}", file_path),
+            }
         }
     }
     None

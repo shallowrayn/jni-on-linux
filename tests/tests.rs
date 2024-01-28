@@ -5,7 +5,7 @@ use test_log::test;
 
 #[test]
 fn find_libc() {
-    match locate::locate_library("libc.so", None) {
+    match locate::locate_library("libc.so.6", None) {
         Some(libc_path) => println!("Found libc: {:?}", libc_path),
         None => panic!("Failed to find libc.so"),
     };

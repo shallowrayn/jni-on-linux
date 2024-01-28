@@ -134,15 +134,19 @@ impl JNI {
         let parent_dir = self.path.parent().map(PathBuf::from);
         let dt_runpath = dt_runpath_offset.and_then(|offset| dynamic_string_table.get(offset).ok()).map(PathBuf::from);
         for lib_name in dependencies {
-            debug!(target: &self.name, "Got dependency {lib_name}");
-            if self.dependencies.contains_key(&lib_name) {
+            trace!(target: &self.name, "Looking for dependency {lib_name}");
+            if let Some(dependency) = self.dependencies.get(&lib_name) {
+                debug!(target: &self.name, "Found dependency {lib_name} - {:?}", dependency.as_ref().map(|d| d.lock().unwrap().path.to_owned()));
                 continue;
             }
             match locate::locate_library_internal(&lib_name, None, parent_dir.clone(), dt_runpath.clone()) {
                 Some(lib_path) => {
-                    self.dependencies.insert(lib_name, JNI::new(lib_path).ok().map(Mutex::new).map(Arc::new));
+                    let dependency = JNI::new(lib_path).ok();
+                    debug!(target: &self.name, "Found dependency {lib_name} - {:?}", dependency.as_ref().map(|d| d.path.to_owned()));
+                    self.dependencies.insert(lib_name, dependency.map(Mutex::new).map(Arc::new));
                 },
                 None => {
+                    debug!(target: &self.name, "Found dependency {lib_name} - None");
                     self.dependencies.insert(lib_name, None);
                 },
             }
