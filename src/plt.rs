@@ -1,8 +1,9 @@
-#[cfg(target_arch = "x86_64")]
+#[cfg(feature = "inline-asm")]
 #[allow(clippy::erasing_op, clippy::identity_op)]
-mod x86_64;
-#[cfg(target_arch = "x86_64")]
-pub use x86_64::plt_callback_trampoline as trampoline;
+#[cfg_attr(target_arch = "x86_64", path = "plt/x86_64.rs")]
+mod asm;
+#[cfg(feature = "inline-asm")]
+pub use asm::plt_callback_trampoline as trampoline;
 
 use super::JNI;
 

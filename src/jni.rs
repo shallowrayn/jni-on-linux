@@ -17,7 +17,9 @@ use elf::{
 use log::{debug, info, trace};
 use thiserror::Error;
 
-use super::{locate, mmap::MemoryMapping, plt, plt::PltData};
+#[cfg(feature = "inline-asm")]
+use super::plt;
+use super::{locate, mmap::MemoryMapping, plt::PltData};
 
 pub struct JNI {
     path: PathBuf,
