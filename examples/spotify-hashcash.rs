@@ -36,6 +36,7 @@ type PowSolveHashcash = extern "C" fn(
 ) -> u32;
 
 fn main() {
+    env_logger::init();
     // Download from https://drive.proton.me/urls/RJX1MDD6KG#VrZCZk72EmBL
     let file_path = PathBuf::from("./liborbit-jni-spotify-8.8.96-x86_64.so");
     let mut lib = JNI::new(file_path).expect("Failed to load Spotify JNI");
@@ -46,7 +47,7 @@ fn main() {
     lib.add_dependency("libandroid.so", None);
     lib.add_dependency("libdl.so", None);
     lib.add_dependency("libc.so", None);
-    lib.load_dependencies();
+    lib.load_dependencies().expect("Failed to load dependencies");
     lib.initialize();
     lib.override_symbol("memset", Some(nix::libc::memset as *const ()));
     lib.override_symbol("memcpy", Some(nix::libc::memcpy as *const ()));

@@ -1,6 +1,7 @@
 use std::{env, io};
 
 use jni_loader::{locate, JNI};
+use test_log::test;
 
 #[test]
 fn find_libc() {
@@ -27,7 +28,7 @@ fn native_library() -> io::Result<()> {
         },
     };
     lib.add_dependency("libc.so.6", None);
-    lib.load_dependencies();
+    lib.load_dependencies().expect("Failed to load dependencies");
     lib.override_symbol("_ITM_deregisterTMCloneTable", None);
     lib.override_symbol("__gmon_start__", None);
     lib.override_symbol("_ITM_registerTMCloneTable", None);

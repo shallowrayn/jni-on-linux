@@ -11,12 +11,13 @@ fn align_up(addr: usize, page_size: usize) -> usize {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::{ffi::c_void, fs::File, num::NonZeroUsize, os::fd::AsFd};
+    use std::{ffi::c_void, fmt::Debug, fs::File, num::NonZeroUsize, os::fd::AsFd};
 
     use elf::{
         abi::{PF_R, PF_W, PF_X, PT_LOAD},
         segment::ProgramHeader,
     };
+    use log::{debug, info, warn};
     use nix::{
         libc::memset,
         sys::mman::{mmap, mprotect, munmap, MapFlags, ProtFlags},
@@ -39,14 +40,34 @@ mod linux {
         pub prot: ProtFlags,
     }
 
+    impl Debug for LoadCommand {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            #[cfg(target_pointer_width = "64")]
+            let ret = write!(
+                f,
+                "LoadCommand {{ {:#018x}-{:#018x}-{:#018x} Offset: {:#018x} Align: {} Prot: {:?} }}",
+                self.map_start, self.data_end, self.alloc_end, self.map_offset, self.map_align, self.prot
+            );
+            #[cfg(not(target_pointer_width = "64"))]
+            let ret = write!(
+                f,
+                "LoadCommand {{ {:#010x}-{:#010x}-{:#010x} Offset: {:#010x} Align: {} Prot: {:?} }}",
+                self.map_start, self.data_end, self.alloc_end, self.map_offset, self.map_align, self.prot
+            );
+            ret
+        }
+    }
+
     impl MemoryMapping {
         pub fn new(file: File, program_headers: &[ProgramHeader]) -> Result<Self, String> {
             // Get the system page size. Memory mappings must lie on page boundaies and be a multiple of the page size
             let page_size = sysconf(SysconfVar::PAGE_SIZE).map_err(|e| e.to_string())?;
             let Some(page_size) = page_size else {
+                warn!("Failed to get system page size");
                 return Err("Page size cannot be empty".to_string());
             };
             let page_size = page_size as usize;
+            debug!("Found system page size: {page_size}");
 
             // Get load commands from program headers
             let mut load_commands = vec![];
@@ -71,6 +92,7 @@ mod linux {
                     if program_header.p_flags & PF_X == PF_X {
                         cmd.prot |= ProtFlags::PROT_EXEC;
                     }
+                    debug!("Found {cmd:?}");
                     load_commands.push(cmd);
                 }
             }
@@ -79,6 +101,7 @@ mod linux {
                 load_alignment <= page_size,
                 "Alignment {load_alignment} larger than page size {page_size}, please open an issue on GitHub"
             );
+            debug!("Load alignment: {load_alignment:#010x}");
             for load_command in load_commands.iter_mut() {
                 load_command.map_align = load_alignment;
             }
@@ -102,6 +125,10 @@ mod linux {
                 Ok(base) => base as usize,
                 Err(errno) => return Err(errno.to_string()),
             };
+            #[cfg(target_pointer_width = "64")]
+            info!("Created mapping {:#018x}-{:#018x}", mapping_base, mapping_base + mapping_size);
+            #[cfg(not(target_pointer_width = "64"))]
+            info!("Created mapping {:#010x}-{:#010x}", mapping_base, mapping_base + mapping_size);
 
             // We now have a block of memory large enough to contain the mapped file, so lets begin loading it. Each
             // segment may have different permissions and permissions are granular to each page, however two segments
@@ -182,6 +209,41 @@ mod linux {
                         let _ = unsafe { munmap(mapping_base as *mut c_void, mapping_size) };
                         return Err(errno.to_string());
                     };
+                    #[cfg(target_pointer_width = "64")]
+                    debug!(
+                        "Mapped {:#018x}-{:#018x} -> {:#018x}-{:#018x}-{:#018x}",
+                        load_command.map_offset,
+                        load_command.map_offset + aligned_data_size,
+                        aligned_data_addr,
+                        aligned_data_addr + aligned_data_size,
+                        aligned_alloc_end_addr
+                    );
+                    #[cfg(not(target_pointer_width = "64"))]
+                    debug!(
+                        "Mapped {:#010x}-{:#010x} -> {:#010x}-{:#010x}-{:#010x}",
+                        load_command.map_offset,
+                        load_command.map_offset + aligned_data_size,
+                        aligned_data_addr,
+                        aligned_data_addr + aligned_data_size,
+                        aligned_alloc_end_addr
+                    );
+                } else {
+                    #[cfg(target_pointer_width = "64")]
+                    debug!(
+                        "Mapped {:#018x}-{:#018x} -> {:#018x}-{:#018x}",
+                        load_command.map_offset,
+                        load_command.map_offset + aligned_data_size,
+                        aligned_data_addr,
+                        aligned_data_addr + aligned_data_size
+                    );
+                    #[cfg(not(target_pointer_width = "64"))]
+                    debug!(
+                        "Mapped {:#010x}-{:#010x} -> {:#010x}-{:#010x}",
+                        load_command.map_offset,
+                        load_command.map_offset + aligned_data_size,
+                        aligned_data_addr,
+                        aligned_data_addr + aligned_data_size
+                    );
                 }
 
                 // Check for overlapping pages and handle accordingly
@@ -217,6 +279,10 @@ mod linux {
 
     impl Drop for MemoryMapping {
         fn drop(&mut self) {
+            #[cfg(target_pointer_width = "64")]
+            info!("Unmapping {:#018x}-{:#018x}", self.base, self.base + self.size);
+            #[cfg(not(target_pointer_width = "64"))]
+            info!("Unmapping {:#010x}-{:#010x}", self.base, self.base + self.size);
             let _ = unsafe { munmap(self.base as *mut c_void, self.size) };
         }
     }

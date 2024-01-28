@@ -4,6 +4,7 @@ use std::{ffi::CStr, os::raw::c_char};
 
 #[cfg(target_os = "linux")]
 use auxv::getauxval::Getauxval;
+use log::trace;
 
 /// Search for a library using ld.so's search order. Custom search paths can
 /// be specified and will take priority
@@ -28,6 +29,7 @@ pub(crate) fn locate_library_internal(
 
     if let Ok(ld_library_path) = env::var("LD_LIBRARY_PATH") {
         let ld_library_path = replace_tokens(ld_library_path, parent_path);
+        trace!("Checking LD_LIBRARY_PATH {ld_library_path}");
         for path in split_paths(&ld_library_path) {
             if let Some(lib_path) = check_directory(name, path) {
                 return Some(lib_path);
@@ -35,8 +37,11 @@ pub(crate) fn locate_library_internal(
         }
     }
 
-    if let Some(lib_path) = dt_runpath.and_then(|p| check_directory(name, p)) {
-        return Some(lib_path);
+    if let Some(dt_runpath) = dt_runpath {
+        trace!("Checking DT_RUNPATH {dt_runpath:?}");
+        if let Some(lib_path) = check_directory(name, dt_runpath) {
+            return Some(lib_path);
+        }
     }
 
     #[cfg(target_pointer_width = "64")]
@@ -72,7 +77,7 @@ fn check_directory(name: &str, directory: PathBuf) -> Option<PathBuf> {
     if !directory.exists() {
         return None;
     }
-
+    trace!("Looking for {name} in {directory:?}");
     let mut file_path = directory.clone();
     file_path.push(name);
     if file_path.exists() {

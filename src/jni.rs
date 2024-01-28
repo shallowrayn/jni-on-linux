@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
-    fs::File,
+    fmt::Debug,
+    fs::{self, File},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -13,12 +14,14 @@ use elf::{
     symbol::Symbol,
     ElfStream,
 };
+use log::{debug, info, trace};
 use thiserror::Error;
 
 use super::{locate, mmap::MemoryMapping, plt, plt::PltData};
 
 pub struct JNI {
     path: PathBuf,
+    name: String,
     elf_file: ElfStream<AnyEndian, File>,
     mapping: MemoryMapping,
     base_virtual_address: usize, // Lowest PT_LOAD virtual address
@@ -49,6 +52,8 @@ impl JNI {
         if elf_file.ehdr.e_type != ET_DYN {
             return Err(Error::NotDynamicObject);
         }
+        let name = path.clone().file_name().unwrap().to_str().unwrap().to_owned();
+        info!(target: &name, "Trying to memory map {:?}", fs::canonicalize(path.clone()).unwrap_or(path.clone()));
         let mapping = match MemoryMapping::new(mapping_file, elf_file.segments()) {
             Ok(mapping) => mapping,
             Err(error) => return Err(Error::MemoryMapFailed(error)),
@@ -56,6 +61,7 @@ impl JNI {
         let base_virtual_address = elf_file.segments().iter().find(|&s| s.p_type == PT_LOAD).unwrap().p_vaddr as usize;
         let mut jni = Box::new(Self {
             path,
+            name,
             elf_file,
             mapping,
             base_virtual_address,
@@ -86,15 +92,15 @@ impl JNI {
         self.dependencies.insert(name.to_string(), lib);
     }
 
-    pub fn load_dependencies(&mut self) {
+    pub fn load_dependencies(&mut self) -> Result<(), Error> {
         if self.loaded_dependencies {
-            return;
+            return Ok(());
         }
         self.loaded_dependencies = true;
 
         // Dependencies are stored using DT_NEEDED keys in the .dynamic section. We also need DT_RUNPATH for locating
         let Ok(Some(dynamic_section)) = self.elf_file.dynamic() else {
-            return;
+            return Err(Error::NoDyanmicSection);
         };
         let mut dependency_offsets = Vec::new();
         let mut dt_runpath_offset = None;
@@ -112,11 +118,11 @@ impl JNI {
 
         // Values from .dynamic are offsets into the .dynstr string table
         let Ok(Some(dynamic_string_table_header)) = self.elf_file.section_header_by_name(".dynstr") else {
-            return;
+            return Err(Error::NoDyanmicSection);
         };
         let dynamic_string_table_header = *dynamic_string_table_header; // End mutable borrow of self.elf_file
         let Ok(dynamic_string_table) = self.elf_file.section_data_as_strtab(&dynamic_string_table_header) else {
-            return;
+            return Err(Error::NoDyanmicSection);
         };
         let dependencies: Vec<String> = dependency_offsets
             .into_iter()
@@ -128,6 +134,7 @@ impl JNI {
         let parent_dir = self.path.parent().map(PathBuf::from);
         let dt_runpath = dt_runpath_offset.and_then(|offset| dynamic_string_table.get(offset).ok()).map(PathBuf::from);
         for lib_name in dependencies {
+            debug!(target: &self.name, "Got dependency {lib_name}");
             if self.dependencies.contains_key(&lib_name) {
                 continue;
             }
@@ -140,9 +147,11 @@ impl JNI {
                 },
             }
         }
+        Ok(())
     }
 
     pub fn override_symbol(&mut self, symbol_name: &str, new_value: Option<*const ()>) {
+        trace!(target: &self.name, "Overriding symbol {symbol_name} with {new_value:?}");
         self.symbol_overrides.insert(symbol_name.to_owned(), new_value.map(|v| v as usize));
     }
 
@@ -163,13 +172,16 @@ impl JNI {
             return;
         }
         self.have_been_initialized = true;
+        debug!(target: &self.name, "Initializing");
 
         for (_, dependency) in self.dependencies.iter() {
             if let Some(dependency) = dependency {
                 // NOTE - Deadlocks
                 // The guard at the top of this function prevents this loop being recursively executed on one instance
                 // If A depends on B and A and B both depend on C, C's lock will be released before B::initialize()
-                dependency.lock().unwrap().initialize();
+                let mut dependency = dependency.lock().unwrap();
+                debug!(target: &self.name, "Initializing dependency {}", dependency.name);
+                dependency.initialize();
             }
         }
 
@@ -185,12 +197,16 @@ impl JNI {
         let mut relocations = Vec::new();
         if let Ok(Some(&rel_dyn_header)) = self.elf_file.section_header_by_name(".rel.dyn") {
             if let Ok(rel_dyn) = self.elf_file.section_data_as_rels(&rel_dyn_header) {
+                let old_len = relocations.len();
                 relocations.extend(rel_dyn.map(Relocation::from));
+                debug!(target: &self.name, "Added {} relocations from .rel.dyn", relocations.len() - old_len);
             }
         }
         if let Ok(Some(&rela_dyn_header)) = self.elf_file.section_header_by_name(".rela.dyn") {
             if let Ok(rela_dyn) = self.elf_file.section_data_as_relas(&rela_dyn_header) {
+                let old_len = relocations.len();
                 relocations.extend(rela_dyn.map(Relocation::from));
+                debug!(target: &self.name, "Added {} relocations from .rela.dyn", relocations.len() - old_len);
             }
         }
         // Without inline assembly we don't have a PLT trampoline. Resolve all PLT entries now
@@ -198,12 +214,16 @@ impl JNI {
         {
             if let Ok(Some(&rel_plt_header)) = self.elf_file.section_header_by_name(".rel.plt") {
                 if let Ok(rel_plt) = self.elf_file.section_data_as_rels(&rel_plt_header) {
+                    let old_len = relocations.len();
                     relocations.extend(rel_plt.map(Relocation::from));
+                    debug!(target: &self.name, "Added {} relocations from .rel.plt", relocations.len() - old_len);
                 }
             }
             if let Ok(Some(&rela_plt_header)) = self.elf_file.section_header_by_name(".rela.plt") {
                 if let Ok(rela_plt) = self.elf_file.section_data_as_relas(&rela_plt_header) {
+                    let old_len = relocations.len();
                     relocations.extend(rela_plt.map(Relocation::from));
+                    debug!(target: &self.name, "Added {} relocations from .rela.plt", relocations.len() - old_len);
                 }
             }
         }
@@ -231,6 +251,10 @@ impl JNI {
                     }
                 }};
             }
+            #[cfg(target_pointer_width = "64")]
+            trace!(target: &self.name, "Processing {relocation:?} at {:#018x}", target_addr);
+            #[cfg(not(target_pointer_width = "64"))]
+            trace!(target: &self.name, "Processing {relocation:?} at {:#010x}", target_addr);
 
             #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
             match relocation.rel_type {
@@ -269,27 +293,52 @@ impl JNI {
         if let Ok(Some(&got_plt_header)) = self.elf_file.section_header_by_name(".got.plt") {
             let got_entry_count = got_plt_header.sh_size as usize / std::mem::size_of::<usize>();
             let got_plt_addr = self.get_offset(got_plt_header.sh_addr as usize);
+            let plt_0 = 0xCAFEBABE;
+            let plt_1 = self.plt_data.as_ref().unwrap() as *const PltData as usize;
+            let plt_2 = plt::trampoline as usize;
+            #[cfg(target_pointer_width = "64")]
+            {
+                debug!(target: &self.name, "Resolving {} .got.plt entries at {:#018x}-{:#018x} using base address {:#018x}", got_entry_count, got_plt_addr, got_plt_addr + got_plt_header.sh_size as usize, self.get_offset(0));
+                debug!(target: &self.name, ".got.plt[0] {:#010x}", plt_0);
+                debug!(target: &self.name, ".got.plt[1] {:#018x}", plt_1);
+                debug!(target: &self.name, ".got.plt[2] {:#018x}", plt_2);
+            }
+            #[cfg(not(target_pointer_width = "64"))]
+            {
+                debug!(target: &self.name, "Resolving {} .got.plt entries at {:#010x}-{:#010x} using base address {:#010x}", got_entry_count, got_plt_addr, got_plt_addr + got_plt_header.sh_size as usize, self.get_offset(0));
+                debug!(target: &self.name, ".got.plt[0] {:#010x}", plt_0);
+                debug!(target: &self.name, ".got.plt[1] {:#010x}", plt_1);
+                debug!(target: &self.name, ".got.plt[2] {:#010x}", plt_2);
+            }
             let got_plt_entries =
                 unsafe { std::slice::from_raw_parts_mut(got_plt_addr as *mut usize, got_entry_count) };
-            got_plt_entries[0] = 0xCAFEBABE;
-            got_plt_entries[1] = self.plt_data.as_ref().unwrap() as *const PltData as usize;
-            got_plt_entries[2] = plt::trampoline as usize;
+            got_plt_entries[0] = plt_0;
+            got_plt_entries[1] = plt_1;
+            got_plt_entries[2] = plt_2;
             for entry in got_plt_entries[3..got_entry_count].iter_mut() {
                 *entry = self.get_offset(*entry);
             }
         }
+
+        debug!(target: &self.name, "Initialized");
     }
 
     // Look for a local symbol using its index
     fn find_local_symbol_by_index(&mut self, index: u32, include_overrides: bool) -> Option<LinkingSymbol> {
+        trace!(target: &self.name, "Looking for symbol {index}");
         let (symbol_table, symbol_string_table) = self.elf_file.dynamic_symbol_table().ok()??;
         let symbol = symbol_table.get(index as usize).ok()?;
         let mut symbol_name = None;
         if symbol.st_name != 0 {
             let sym_name = symbol_string_table.get(symbol.st_name as usize).ok()?.to_owned();
+            trace!(target: &self.name, r#"Found name "{sym_name}" for index {index}"#);
             if include_overrides {
                 if let Some(&overridden_value) = self.symbol_overrides.get(&sym_name) {
                     let address = overridden_value.unwrap_or(UNDEFINED_SYMBOL_VALUE);
+                    #[cfg(target_pointer_width = "64")]
+                    trace!(target: &self.name, r#"Found override {:#018x} for "{}""#, address, sym_name);
+                    #[cfg(not(target_pointer_width = "64"))]
+                    trace!(target: &self.name, r#"Found override {:#010x} for "{}""#, address, sym_name);
                     return Some(LinkingSymbol::from_override(&symbol, Some(sym_name), address));
                 }
             }
@@ -300,6 +349,7 @@ impl JNI {
 
     // Look for a local symbol using the hash tables
     fn find_local_symbol_by_name(&mut self, symbol_name: &str, include_overrides: bool) -> Option<LinkingSymbol> {
+        trace!(target: &self.name, r#"Looking for symbol "{symbol_name}" in hash tables"#);
         // Check .gnu.hash first as it is faster
         if let Ok(Some(&gnu_hash_section_header)) = self.elf_file.section_header_by_name(".gnu.hash") {
             let elf_endianness = self.elf_file.ehdr.endianness;
@@ -312,9 +362,14 @@ impl JNI {
             if let Some((_, symbol)) =
                 hash_section.find(symbol_name.as_bytes(), &symbol_table, &symbol_string_table).ok()?
             {
+                trace!(target: &self.name, r#"Found "{symbol_name}" in .gnu.hash"#);
                 if include_overrides {
                     if let Some(&overridden_value) = self.symbol_overrides.get(symbol_name) {
                         let address = overridden_value.unwrap_or(UNDEFINED_SYMBOL_VALUE);
+                        #[cfg(target_pointer_width = "64")]
+                        trace!(target: &self.name, r#"Found override {:#018x} for "{}""#, address, symbol_name);
+                        #[cfg(not(target_pointer_width = "64"))]
+                        trace!(target: &self.name, r#"Found override {:#010x} for "{}""#, address, symbol_name);
                         return Some(LinkingSymbol::from_override(&symbol, Some(symbol_name.to_owned()), address));
                     }
                 }
@@ -333,9 +388,14 @@ impl JNI {
             if let Some((_, symbol)) =
                 hash_section.find(symbol_name.as_bytes(), &symbol_table, &symbol_string_table).ok()?
             {
+                trace!(target: &self.name, r#"Found "{symbol_name}" in .hash"#);
                 if include_overrides {
                     if let Some(&overridden_value) = self.symbol_overrides.get(symbol_name) {
                         let address = overridden_value.unwrap_or(UNDEFINED_SYMBOL_VALUE);
+                        #[cfg(target_pointer_width = "64")]
+                        trace!(target: &self.name, r#"Found override {:#018x} for "{}""#, address, symbol_name);
+                        #[cfg(not(target_pointer_width = "64"))]
+                        trace!(target: &self.name, r#"Found override {:#010x} for "{}""#, address, symbol_name);
                         return Some(LinkingSymbol::from_override(&symbol, Some(symbol_name.to_owned()), address));
                     }
                 }
@@ -360,6 +420,7 @@ impl JNI {
             return None;
         }
         self.looking_for_symbol = true;
+        trace!(target: &self.name, "Looking for symbol {symbol_name}");
         for (_, dependency) in self.dependencies.iter() {
             if let Some(dependency) = dependency {
                 // looking_for_symbol protects us from recursively calling lock()
@@ -382,6 +443,7 @@ impl JNI {
         let mut relocation_symbol = None;
 
         if let Ok(Some(&rel_plt_header)) = self.elf_file.section_header_by_name(".rel.plt") {
+            debug!(target: &self.name, "Trying to resolve .rel.plt[{}]", reloc_index);
             if let Ok(mut rel_plt) = self.elf_file.section_data_as_rels(&rel_plt_header) {
                 if let Some(reloc) = rel_plt.nth(reloc_index) {
                     relocation_offset = Some(reloc.r_offset as usize);
@@ -391,6 +453,7 @@ impl JNI {
             }
         }
         if let Ok(Some(&rela_plt_header)) = self.elf_file.section_header_by_name(".rela.plt") {
+            debug!(target: &self.name, "Trying to resolve .rela.plt[{}]", reloc_index);
             if let Ok(mut rela_plt) = self.elf_file.section_data_as_relas(&rela_plt_header) {
                 if let Some(reloc) = rela_plt.nth(reloc_index) {
                     relocation_offset = Some(reloc.r_offset as usize);
@@ -405,7 +468,12 @@ impl JNI {
         let relocation_symbol = relocation_symbol?;
         let symbol_addr = self.resolve_plt_symbol(relocation_symbol)?;
         let target_addr = self.get_offset(relocation_offset);
-        unsafe { *(target_addr as *mut usize) = add_addend(symbol_addr, relocation_addend) }
+        let target_value = add_addend(symbol_addr, relocation_addend);
+        #[cfg(target_pointer_width = "64")]
+        debug!(target: &self.name, "Handling PLT entry {reloc_index} by writing {:#018x} to {:#018x}", target_value, target_addr);
+        #[cfg(not(target_pointer_width = "64"))]
+        debug!(target: &self.name, "Handling PLT entry {reloc_index} by writing {:#010x} to {:#010x}", target_value, target_addr);
+        unsafe { *(target_addr as *mut usize) = target_value }
         Some(symbol_addr)
     }
 
@@ -448,6 +516,23 @@ impl From<Rela> for Relocation {
             symbol: relocation.r_sym,
             addend: relocation.r_addend,
         }
+    }
+}
+impl Debug for Relocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[cfg(target_pointer_width = "64")]
+        let ret = write!(
+            f,
+            "Relocation {{ offset: {:#018x} type: {:#010x} symbol: {} addend: {} }}",
+            self.offset, self.rel_type, self.symbol, self.addend
+        );
+        #[cfg(not(target_pointer_width = "64"))]
+        let ret = write!(
+            f,
+            "Relocation {{ offset: {:#010x} type: {:#010x} symbol: {} addend: {} }}",
+            self.offset, self.rel_type, self.symbol, self.addend
+        );
+        ret
     }
 }
 
@@ -509,4 +594,6 @@ pub enum Error {
     NotDynamicObject,
     #[error("failed to map memory - {0}")]
     MemoryMapFailed(String),
+    #[error("failed to find .dynamic section")]
+    NoDyanmicSection,
 }
