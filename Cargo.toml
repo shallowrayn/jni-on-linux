@@ -21,3 +21,6 @@ thiserror = "1.0.56"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.27.1", features = ["mman", "feature"] }
+
+[dev-dependencies]
+hex = "0.4.3"
