@@ -151,9 +151,11 @@ impl JNI {
         if symbol.is_none() {
             symbol = self.find_global_symbol(symbol_name, false);
         }
-        symbol.map(|symbol| {
-            ((self.mapping.base + symbol.value as usize - self.base_virtual_address) as *const (), symbol.size)
-        })
+        symbol.map(|symbol| (self.get_offset(symbol.value as usize) as *const (), symbol.size))
+    }
+
+    pub fn get_offset(&self, offset: usize) -> usize {
+        self.mapping.base + offset - self.base_virtual_address
     }
 
     pub fn initialize(&mut self) {
@@ -206,13 +208,14 @@ impl JNI {
             }
         }
         for relocation in relocations {
-            let target_addr = self.mapping.base + relocation.offset - self.base_virtual_address;
+            let target_addr = self.get_offset(relocation.offset);
             // Only some relocations need the symbol
             macro_rules! reloc_needs_symbol {
                 ($reloc:expr) => {{
                     let symbol = if relocation.symbol != 0 {
-                        let local_symbol =
-                            self.find_local_symbol_by_index(relocation.symbol, true).expect("Failed to find symbol");
+                        let Some(local_symbol) = self.find_local_symbol_by_index(relocation.symbol, true) else {
+                            continue;
+                        };
                         if local_symbol.address.is_some() {
                             Some(local_symbol)
                         } else {
@@ -223,10 +226,8 @@ impl JNI {
                         None
                     };
                     match symbol {
-                        Some(s) => {
-                            s.address.unwrap_or(self.mapping.base + s.value as usize - self.base_virtual_address)
-                        },
-                        None => panic!("Reloc {} failed to find symbol", $reloc),
+                        Some(s) => s.address.unwrap_or(self.get_offset(s.value as usize)),
+                        None => continue,
                     }
                 }};
             }
@@ -267,14 +268,14 @@ impl JNI {
         #[cfg(feature = "inline-asm")]
         if let Ok(Some(&got_plt_header)) = self.elf_file.section_header_by_name(".got.plt") {
             let got_entry_count = got_plt_header.sh_size as usize / std::mem::size_of::<usize>();
-            let got_plt_addr = self.mapping.base + got_plt_header.sh_addr as usize - self.base_virtual_address;
+            let got_plt_addr = self.get_offset(got_plt_header.sh_addr as usize);
             let got_plt_entries =
                 unsafe { std::slice::from_raw_parts_mut(got_plt_addr as *mut usize, got_entry_count) };
             got_plt_entries[0] = 0xCAFEBABE;
             got_plt_entries[1] = self.plt_data.as_ref().unwrap() as *const PltData as usize;
             got_plt_entries[2] = plt::trampoline as usize;
             for entry in got_plt_entries[3..got_entry_count].iter_mut() {
-                *entry = self.mapping.base + *entry - self.base_virtual_address;
+                *entry = self.get_offset(*entry);
             }
         }
     }
@@ -403,7 +404,7 @@ impl JNI {
         let relocation_addend = relocation_addend?;
         let relocation_symbol = relocation_symbol?;
         let symbol_addr = self.resolve_plt_symbol(relocation_symbol)?;
-        let target_addr = self.mapping.base + relocation_offset - self.base_virtual_address;
+        let target_addr = self.get_offset(relocation_offset);
         unsafe { *(target_addr as *mut usize) = add_addend(symbol_addr, relocation_addend) }
         Some(symbol_addr)
     }
@@ -414,7 +415,7 @@ impl JNI {
             return local_symbol.address;
         }
         if local_symbol.value != 0 {
-            return Some(self.mapping.base + local_symbol.value as usize - self.base_virtual_address);
+            return Some(self.get_offset(local_symbol.value as usize));
         }
         let symbol_name = local_symbol.name?;
         let global_symbol = self.find_global_symbol(&symbol_name, true)?;
@@ -423,7 +424,7 @@ impl JNI {
         }
         match global_symbol.value {
             0 => None,
-            value => Some(self.mapping.base + value as usize - self.base_virtual_address),
+            value => Some(self.get_offset(value as usize)),
         }
     }
 }
