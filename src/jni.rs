@@ -262,7 +262,7 @@ impl JNI {
             #[cfg(not(target_pointer_width = "64"))]
             trace!(target: &self.name, "Processing {relocation:?} at {:#010x}", target_addr);
 
-            #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
+            #[cfg(target_arch = "x86_64")]
             match relocation.rel_type {
                 elf::abi::R_X86_64_64 => {
                     let symbol_addr = reloc_needs_symbol!("R_X86_64_64");
@@ -290,7 +290,24 @@ impl JNI {
                     );
                 },
             }
-            #[cfg(not(all(target_arch = "x86_64", target_pointer_width = "64")))]
+            #[cfg(target_arch = "aarch64")]
+            match relocation.rel_type {
+                elf::abi::R_AARCH64_GLOB_DAT | elf::abi::R_AARCH64_JUMP_SLOT => {
+                    let symbol_addr = reloc_needs_symbol!("R_AARCH64_JUMP_SLOT");
+                    unsafe { *(target_addr as *mut u64) = add_addend(symbol_addr, relocation.addend) as u64 };
+                },
+                elf::abi::R_AARCH64_RELATIVE => {
+                    unsafe { *(target_addr as *mut u64) = add_addend(self.mapping.base, relocation.addend) as u64 };
+                },
+                _ => {
+                    #[cfg(debug_assertions)]
+                    panic!(
+                        "Failed to handle relocation type {:#08x} for offset {:#012x}",
+                        relocation.rel_type, relocation.offset
+                    );
+                },
+            }
+            #[cfg(all(not(target_arch = "x86_64"), not(target_arch = "aarch64")))]
             panic!("Unhandled system architecture")
         }
 

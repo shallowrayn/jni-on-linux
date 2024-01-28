@@ -11,7 +11,6 @@ const SAVED_REGISTERS_SPACE: usize = 8 * 8;
 
 #[naked]
 pub unsafe extern "C" fn plt_callback_trampoline() {
-    #[cfg(target_arch = "x86_64")]
     asm!(
         "push rbp",
         "mov rbp, rsp",
