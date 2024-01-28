@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fs::File, path::PathBuf, rc::Rc, sync::Mutex};
+use std::{
+    collections::HashMap,
+    fs::File,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use elf::{
     abi::{DT_NEEDED, DT_RUNPATH, ET_DYN, PT_LOAD},
@@ -10,24 +15,25 @@ use elf::{
 };
 use thiserror::Error;
 
-use super::{locate, mmap::MemoryMapping};
+use super::{locate, mmap::MemoryMapping, plt, plt::PltData};
 
 pub struct JNI {
     path: PathBuf,
     elf_file: ElfStream<AnyEndian, File>,
     mapping: MemoryMapping,
     base_virtual_address: usize, // Lowest PT_LOAD virtual address
-    dependencies: HashMap<String, Option<Rc<Mutex<JNI>>>>,
+    dependencies: HashMap<String, Option<Arc<Mutex<Box<JNI>>>>>,
     loaded_dependencies: bool,
     have_been_initialized: bool,
     symbol_overrides: HashMap<String, Option<usize>>,
     looking_for_symbol: bool,
+    plt_data: Option<PltData>,
 }
 
 const UNDEFINED_SYMBOL_VALUE: usize = 0xBABECAFE;
 
 impl JNI {
-    pub fn new(path: PathBuf) -> Result<Self, Error> {
+    pub fn new(path: PathBuf) -> Result<Box<Self>, Error> {
         if !path.exists() {
             return Err(Error::FileNotFound);
         }
@@ -48,7 +54,7 @@ impl JNI {
             Err(error) => return Err(Error::MemoryMapFailed(error)),
         };
         let base_virtual_address = elf_file.segments().iter().find(|&s| s.p_type == PT_LOAD).unwrap().p_vaddr as usize;
-        Ok(Self {
+        let mut jni = Box::new(Self {
             path,
             elf_file,
             mapping,
@@ -58,21 +64,25 @@ impl JNI {
             have_been_initialized: false,
             symbol_overrides: HashMap::new(),
             looking_for_symbol: false,
-        })
+            plt_data: None,
+        });
+        let jni_addr = &mut *jni as *mut JNI;
+        jni.plt_data = Some(PltData::new(jni_addr));
+        Ok(jni)
     }
 
-    pub fn new_from_name(name: &str) -> Result<Self, Error> {
+    pub fn new_from_name(name: &str) -> Result<Box<Self>, Error> {
         match locate::locate_library(name, None) {
             Some(lib_path) => Self::new(lib_path),
             None => Err(Error::FileNotFound),
         }
     }
 
-    pub fn add_dependency(&mut self, name: &str, lib: Option<JNI>) {
-        self.dependencies.insert(name.to_string(), lib.map(Mutex::new).map(Rc::new));
+    pub fn add_dependency(&mut self, name: &str, lib: Option<Box<JNI>>) {
+        self.dependencies.insert(name.to_string(), lib.map(Mutex::new).map(Arc::new));
     }
 
-    pub fn add_shared_dependency(&mut self, name: &str, lib: Option<Rc<Mutex<JNI>>>) {
+    pub fn add_shared_dependency(&mut self, name: &str, lib: Option<Arc<Mutex<Box<JNI>>>>) {
         self.dependencies.insert(name.to_string(), lib);
     }
 
@@ -123,7 +133,7 @@ impl JNI {
             }
             match locate::locate_library_internal(&lib_name, None, parent_dir.clone(), dt_runpath.clone()) {
                 Some(lib_path) => {
-                    self.dependencies.insert(lib_name, JNI::new(lib_path).ok().map(Mutex::new).map(Rc::new));
+                    self.dependencies.insert(lib_name, JNI::new(lib_path).ok().map(Mutex::new).map(Arc::new));
                 },
                 None => {
                     self.dependencies.insert(lib_name, None);
@@ -203,7 +213,7 @@ impl JNI {
                     let symbol = if relocation.symbol != 0 {
                         let local_symbol =
                             self.find_local_symbol_by_index(relocation.symbol, true).expect("Failed to find symbol");
-                        if local_symbol.address != 0 {
+                        if local_symbol.address.is_some() {
                             Some(local_symbol)
                         } else {
                             let symbol_name = local_symbol.name.expect("Cannot lookup symbol without name");
@@ -213,18 +223,12 @@ impl JNI {
                         None
                     };
                     match symbol {
-                        Some(s) => s.address,
+                        Some(s) => {
+                            s.address.unwrap_or(self.mapping.base + s.value as usize - self.base_virtual_address)
+                        },
                         None => panic!("Reloc {} failed to find symbol", $reloc),
                     }
                 }};
-            }
-            // Deal with addend
-            fn add_addend(addr: usize, addend: i64) -> usize {
-                if addend.is_negative() {
-                    addr - (addend.unsigned_abs() as usize)
-                } else {
-                    addr + (addend as usize)
-                }
             }
 
             #[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
@@ -258,6 +262,21 @@ impl JNI {
             #[cfg(not(all(target_arch = "x86_64", target_pointer_width = "64")))]
             panic!("Unhandled system architecture")
         }
+
+        // Set up the PLT handler if needed
+        #[cfg(feature = "inline-asm")]
+        if let Ok(Some(&got_plt_header)) = self.elf_file.section_header_by_name(".got.plt") {
+            let got_entry_count = got_plt_header.sh_size as usize / std::mem::size_of::<usize>();
+            let got_plt_addr = self.mapping.base + got_plt_header.sh_addr as usize - self.base_virtual_address;
+            let got_plt_entries =
+                unsafe { std::slice::from_raw_parts_mut(got_plt_addr as *mut usize, got_entry_count) };
+            got_plt_entries[0] = 0xCAFEBABE;
+            got_plt_entries[1] = self.plt_data.as_ref().unwrap() as *const PltData as usize;
+            got_plt_entries[2] = plt::trampoline as usize;
+            for entry in got_plt_entries[3..got_entry_count].iter_mut() {
+                *entry = self.mapping.base + *entry - self.base_virtual_address;
+            }
+        }
     }
 
     // Look for a local symbol using its index
@@ -275,7 +294,7 @@ impl JNI {
             }
             symbol_name = Some(sym_name);
         }
-        Some(LinkingSymbol::from(&symbol, symbol_name, self.mapping.base, self.base_virtual_address))
+        Some(LinkingSymbol::from(&symbol, symbol_name))
     }
 
     // Look for a local symbol using the hash tables
@@ -298,12 +317,7 @@ impl JNI {
                         return Some(LinkingSymbol::from_override(&symbol, Some(symbol_name.to_owned()), address));
                     }
                 }
-                return Some(LinkingSymbol::from(
-                    &symbol,
-                    Some(symbol_name.to_owned()),
-                    self.mapping.base,
-                    self.base_virtual_address,
-                ));
+                return Some(LinkingSymbol::from(&symbol, Some(symbol_name.to_owned())));
             }
         }
 
@@ -324,12 +338,7 @@ impl JNI {
                         return Some(LinkingSymbol::from_override(&symbol, Some(symbol_name.to_owned()), address));
                     }
                 }
-                return Some(LinkingSymbol::from(
-                    &symbol,
-                    Some(symbol_name.to_owned()),
-                    self.mapping.base,
-                    self.base_virtual_address,
-                ));
+                return Some(LinkingSymbol::from(&symbol, Some(symbol_name.to_owned())));
             }
         }
 
@@ -365,6 +374,58 @@ impl JNI {
         self.looking_for_symbol = false;
         None
     }
+
+    pub(crate) fn plt_callback(&mut self, reloc_index: usize) -> Option<usize> {
+        let mut relocation_offset = None;
+        let mut relocation_addend = None;
+        let mut relocation_symbol = None;
+
+        if let Ok(Some(&rel_plt_header)) = self.elf_file.section_header_by_name(".rel.plt") {
+            if let Ok(mut rel_plt) = self.elf_file.section_data_as_rels(&rel_plt_header) {
+                if let Some(reloc) = rel_plt.nth(reloc_index) {
+                    relocation_offset = Some(reloc.r_offset as usize);
+                    relocation_addend = Some(0);
+                    relocation_symbol = Some(reloc.r_sym);
+                }
+            }
+        }
+        if let Ok(Some(&rela_plt_header)) = self.elf_file.section_header_by_name(".rela.plt") {
+            if let Ok(mut rela_plt) = self.elf_file.section_data_as_relas(&rela_plt_header) {
+                if let Some(reloc) = rela_plt.nth(reloc_index) {
+                    relocation_offset = Some(reloc.r_offset as usize);
+                    relocation_addend = Some(reloc.r_addend);
+                    relocation_symbol = Some(reloc.r_sym);
+                }
+            }
+        }
+
+        let relocation_offset = relocation_offset?;
+        let relocation_addend = relocation_addend?;
+        let relocation_symbol = relocation_symbol?;
+        let symbol_addr = self.resolve_plt_symbol(relocation_symbol)?;
+        let target_addr = self.mapping.base + relocation_offset - self.base_virtual_address;
+        unsafe { *(target_addr as *mut usize) = add_addend(symbol_addr, relocation_addend) }
+        Some(symbol_addr)
+    }
+
+    fn resolve_plt_symbol(&mut self, symbol_idx: u32) -> Option<usize> {
+        let local_symbol = self.find_local_symbol_by_index(symbol_idx, true)?;
+        if local_symbol.address.is_some() {
+            return local_symbol.address;
+        }
+        if local_symbol.value != 0 {
+            return Some(self.mapping.base + local_symbol.value as usize - self.base_virtual_address);
+        }
+        let symbol_name = local_symbol.name?;
+        let global_symbol = self.find_global_symbol(&symbol_name, true)?;
+        if global_symbol.address.is_some() {
+            return global_symbol.address;
+        }
+        match global_symbol.value {
+            0 => None,
+            value => Some(self.mapping.base + value as usize - self.base_virtual_address),
+        }
+    }
 }
 
 struct Relocation {
@@ -394,7 +455,7 @@ struct LinkingSymbol {
     name: Option<String>,
     shndx: u16,
     value: u64,
-    address: usize,
+    address: Option<usize>,
     size: u64,
     sym_type: u8,
     binding: u8,
@@ -402,12 +463,12 @@ struct LinkingSymbol {
 }
 
 impl LinkingSymbol {
-    pub fn from(symbol: &Symbol, name: Option<String>, module_base: usize, base_virtual_addr: usize) -> Self {
+    pub fn from(symbol: &Symbol, name: Option<String>) -> Self {
         LinkingSymbol {
             name,
             shndx: symbol.st_shndx,
             value: symbol.st_value,
-            address: module_base + symbol.st_value as usize - base_virtual_addr,
+            address: None,
             size: symbol.st_size,
             sym_type: symbol.st_symtype(),
             binding: symbol.st_bind(),
@@ -420,12 +481,20 @@ impl LinkingSymbol {
             name,
             shndx: symbol.st_shndx,
             value: symbol.st_value,
-            address,
+            address: Some(address),
             size: symbol.st_size,
             sym_type: symbol.st_symtype(),
             binding: symbol.st_bind(),
             visibility: symbol.st_vis(),
         }
+    }
+}
+
+fn add_addend(addr: usize, addend: i64) -> usize {
+    if addend.is_negative() {
+        addr - (addend.unsigned_abs() as usize)
+    } else {
+        addr + (addend as usize)
     }
 }
 
