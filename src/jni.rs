@@ -36,6 +36,7 @@ pub struct JNI {
 }
 
 const UNDEFINED_SYMBOL_VALUE: usize = 0xBABECAFE;
+const STN_UNDEF: u64 = 0; // Undefined symbol
 
 impl JNI {
     pub fn new(path: PathBuf) -> Result<Box<Self>, Error> {
@@ -367,7 +368,7 @@ impl JNI {
             }
             symbol_name = Some(sym_name);
         }
-        Some(LinkingSymbol::from(&symbol, symbol_name))
+        Some(LinkingSymbol::from(&symbol, symbol_name, self.mapping.base, self.base_virtual_address))
     }
 
     // Look for a local symbol using the hash tables
@@ -396,7 +397,12 @@ impl JNI {
                         return Some(LinkingSymbol::from_override(&symbol, Some(symbol_name.to_owned()), address));
                     }
                 }
-                return Some(LinkingSymbol::from(&symbol, Some(symbol_name.to_owned())));
+                return Some(LinkingSymbol::from(
+                    &symbol,
+                    Some(symbol_name.to_owned()),
+                    self.mapping.base,
+                    self.base_virtual_address,
+                ));
             }
         }
 
@@ -422,7 +428,12 @@ impl JNI {
                         return Some(LinkingSymbol::from_override(&symbol, Some(symbol_name.to_owned()), address));
                     }
                 }
-                return Some(LinkingSymbol::from(&symbol, Some(symbol_name.to_owned())));
+                return Some(LinkingSymbol::from(
+                    &symbol,
+                    Some(symbol_name.to_owned()),
+                    self.mapping.base,
+                    self.base_virtual_address,
+                ));
             }
         }
 
@@ -452,6 +463,7 @@ impl JNI {
                     .find_local_symbol_by_name(symbol_name, include_overrides)
                     .or(dependency.find_global_symbol(symbol_name, include_overrides));
                 if symbol.is_some() {
+                    self.looking_for_symbol = false;
                     return symbol;
                 }
             }
@@ -560,6 +572,7 @@ impl Debug for Relocation {
 }
 
 // Used to represent a symbol while linking
+#[allow(dead_code)]
 struct LinkingSymbol {
     name: Option<String>,
     shndx: u16,
@@ -572,12 +585,15 @@ struct LinkingSymbol {
 }
 
 impl LinkingSymbol {
-    pub fn from(symbol: &Symbol, name: Option<String>) -> Self {
+    pub fn from(symbol: &Symbol, name: Option<String>, mapping_base: usize, virtual_base_address: usize) -> Self {
         LinkingSymbol {
             name,
             shndx: symbol.st_shndx,
             value: symbol.st_value,
-            address: None,
+            address: match symbol.st_value {
+                STN_UNDEF => None,
+                value => Some(mapping_base + value as usize - virtual_base_address),
+            },
             size: symbol.st_size,
             sym_type: symbol.st_symtype(),
             binding: symbol.st_bind(),

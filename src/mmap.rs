@@ -97,10 +97,7 @@ mod linux {
                 }
             }
             // TODO: How to handle alignment larger than page size?
-            assert!(
-                load_alignment <= page_size,
-                "Alignment {load_alignment} larger than page size {page_size}, please open an issue on GitHub"
-            );
+            // ld.so doesn't seem to do anything special, the mapping base is not aligned nor are the segments
             debug!("Load alignment: {load_alignment:#010x}");
             for load_command in load_commands.iter_mut() {
                 load_command.map_align = load_alignment;
