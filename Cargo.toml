@@ -24,6 +24,7 @@ thiserror = "1.0.56"
 nix = { version = "0.27.1", features = ["mman", "feature"] }
 
 [dev-dependencies]
+anyhow = "1.0.79"
 env_logger = "0.11.1"
 hex = "0.4.3"
 test-log = "0.2.14"
