@@ -1,6 +1,7 @@
 #[cfg(feature = "inline-asm")]
 #[allow(clippy::erasing_op, clippy::identity_op)]
 #[cfg_attr(target_arch = "x86_64", path = "plt/x86_64.rs")]
+#[cfg_attr(target_arch = "aarch64", path = "plt/aarch64.rs")]
 mod asm;
 #[cfg(feature = "inline-asm")]
 pub use asm::plt_callback_trampoline as trampoline;
