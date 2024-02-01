@@ -293,7 +293,7 @@ impl JNI {
             }
             #[cfg(target_arch = "aarch64")]
             match relocation.rel_type {
-                elf::abi::R_AARCH64_GLOB_DAT | elf::abi::R_AARCH64_JUMP_SLOT => {
+                elf::abi::R_AARCH64_GLOB_DAT | elf::abi::R_AARCH64_JUMP_SLOT | elf::abi::R_AARCH64_ABS64 => {
                     let symbol_addr = reloc_needs_symbol!("R_AARCH64_JUMP_SLOT");
                     unsafe { *(target_addr as *mut u64) = add_addend(symbol_addr, relocation.addend) as u64 };
                 },
