@@ -223,14 +223,14 @@ impl JNI {
                 if let Ok(rel_plt) = self.elf_file.section_data_as_rels(&rel_plt_header) {
                     let old_len = relocations.len();
                     relocations.extend(rel_plt.map(Relocation::from));
-                    debug!(target: &self.name, "Added {} relocations from .rel.plt", relocations.len() - old_len);
+                    debug!(target: &self.name, "Assembly disabled, added {} relocations from .rel.plt", relocations.len() - old_len);
                 }
             }
             if let Ok(Some(&rela_plt_header)) = self.elf_file.section_header_by_name(".rela.plt") {
                 if let Ok(rela_plt) = self.elf_file.section_data_as_relas(&rela_plt_header) {
                     let old_len = relocations.len();
                     relocations.extend(rela_plt.map(Relocation::from));
-                    debug!(target: &self.name, "Added {} relocations from .rela.plt", relocations.len() - old_len);
+                    debug!(target: &self.name, "Assembly disabled, added {} relocations from .rela.plt", relocations.len() - old_len);
                 }
             }
         }
@@ -322,14 +322,14 @@ impl JNI {
             let plt_2 = plt::trampoline as usize;
             #[cfg(target_pointer_width = "64")]
             {
-                debug!(target: &self.name, "Resolving {} .got.plt entries at {:#018x}-{:#018x} using base address {:#018x}", got_entry_count, got_plt_addr, got_plt_addr + got_plt_header.sh_size as usize, self.get_offset(0));
+                debug!(target: &self.name, "Updating {} .got.plt entries at {:#018x}-{:#018x} using base address {:#018x}", got_entry_count, got_plt_addr, got_plt_addr + got_plt_header.sh_size as usize, self.get_offset(0));
                 debug!(target: &self.name, ".got.plt[0] {:#010x}", plt_0);
                 debug!(target: &self.name, ".got.plt[1] {:#018x}", plt_1);
                 debug!(target: &self.name, ".got.plt[2] {:#018x}", plt_2);
             }
             #[cfg(not(target_pointer_width = "64"))]
             {
-                debug!(target: &self.name, "Resolving {} .got.plt entries at {:#010x}-{:#010x} using base address {:#010x}", got_entry_count, got_plt_addr, got_plt_addr + got_plt_header.sh_size as usize, self.get_offset(0));
+                debug!(target: &self.name, "Updating {} .got.plt entries at {:#010x}-{:#010x} using base address {:#010x}", got_entry_count, got_plt_addr, got_plt_addr + got_plt_header.sh_size as usize, self.get_offset(0));
                 debug!(target: &self.name, ".got.plt[0] {:#010x}", plt_0);
                 debug!(target: &self.name, ".got.plt[1] {:#010x}", plt_1);
                 debug!(target: &self.name, ".got.plt[2] {:#010x}", plt_2);

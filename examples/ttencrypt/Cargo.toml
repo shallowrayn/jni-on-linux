@@ -1,0 +1,13 @@
+[package]
+name = "ttencrypt"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# TODO: libEncryptor.so doesn't have a .got.plt section
+jni-loader = { path = "../../jni-loader", default-features = false }
+jni = { version = "0.21.1", features = ["invocation"] }
+hex = "0.4.3"
+env_logger = "0.11.1"
+nix = "0.27.1"
+anyhow = "1.0.79"
