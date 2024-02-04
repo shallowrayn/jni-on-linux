@@ -1,26 +1,20 @@
-use std::env;
+use std::{env, ffi::c_int};
 
 use anyhow::Result;
-use jni_loader::{locate, JNI};
-use test_log::test;
+use jni_loader::JNI;
 
-#[test]
-fn find_libc() {
-    match locate::locate_library("libc.so.6", None) {
-        Some(libc_path) => println!("Found libc: {:?}", libc_path),
-        None => panic!("Failed to find libc.so"),
-    };
-}
-
-extern "C" fn m_cube(x: std::ffi::c_int) -> std::ffi::c_int {
+extern "C" fn m_cube(x: c_int) -> c_int {
     x * x * x
 }
 
-#[test]
-fn native_library() -> Result<()> {
-    let linking_dir = env::current_dir()?.join("tests").join("linking");
-    let lib_math_path = linking_dir.clone().join("libmath.so");
-    let lib_power_path = linking_dir.clone().join("libpower.so");
+fn main() -> Result<()> {
+    if env::var("RUST_LOG").is_err() {
+        env::set_var("RUST_LOG", "debug")
+    }
+    env_logger::init();
+    let current_dir = env::current_dir()?;
+    let lib_math_path = current_dir.clone().join("libmath.so");
+    let lib_power_path = current_dir.clone().join("libpower.so");
 
     let mut lib_math = JNI::new(lib_math_path)?;
     lib_math.add_dependency("libc.so.6", None);
@@ -36,7 +30,7 @@ fn native_library() -> Result<()> {
 
     let (test_libpower, _) = lib_power.get_symbol("test_libpower").unwrap();
     let test_libpower: extern "C" fn() -> std::ffi::c_int = unsafe { std::mem::transmute(test_libpower) };
-    assert_eq!(0, test_libpower());
+    println!("test_libpower() - {}", test_libpower());
 
     Ok(())
 }

@@ -1,0 +1,9 @@
+[package]
+name = "linking"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+jni-loader = { path = "../../jni-loader" }
+env_logger = "0.11.1"
+anyhow = "1.0.79"

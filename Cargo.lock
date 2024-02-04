@@ -139,15 +139,6 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cd405aab171cb85d6735e5c8d9db038c17d3ca007a4d2c25f337935c3d90580"
-dependencies = [
- "log",
-]
-
-[[package]]
-name = "env_logger"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05e7cf40684ae96ade6232ed84582f40ce0a66efcd43a5117aef610534f8e0b8"
@@ -215,14 +206,10 @@ dependencies = [
 name = "jni-loader"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "auxv",
  "elf",
- "env_logger 0.11.1",
- "hex",
  "log",
  "nix",
- "test-log",
  "thiserror",
 ]
 
@@ -252,6 +239,15 @@ checksum = "b67380fd3b2fbe7527a606e18729d21c6f3951633d0500574c4dc22d2d638b9f"
 dependencies = [
  "cfg-if",
  "winapi",
+]
+
+[[package]]
+name = "linking"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "env_logger",
+ "jni-loader",
 ]
 
 [[package]]
@@ -337,7 +333,7 @@ dependencies = [
 name = "spotify-hashcash"
 version = "0.1.0"
 dependencies = [
- "env_logger 0.11.1",
+ "env_logger",
  "hex",
  "jni-loader",
  "nix",
@@ -352,27 +348,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "test-log"
-version = "0.2.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6159ab4116165c99fc88cce31f99fa2c9dbe08d3691cb38da02fc3b45f357d2b"
-dependencies = [
- "env_logger 0.10.2",
- "test-log-macros",
-]
-
-[[package]]
-name = "test-log-macros"
-version = "0.2.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ba277e77219e9eea169e8508942db1bf5d8a41ff2db9b20aab5a5aadc9fa25d"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -400,7 +375,7 @@ name = "ttencrypt"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "env_logger 0.11.1",
+ "env_logger",
  "hex",
  "jni",
  "jni-loader",
