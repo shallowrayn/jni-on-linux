@@ -4,7 +4,6 @@ use std::env;
 use anyhow::Result;
 use jni::{objects::JByteArray, InitArgsBuilder, JavaVM};
 use jni_loader::JNI;
-use nix::libc;
 
 // Class:     com_bytedance_frameworks_encryptor_EncryptorUtil
 // Method:    ttEncrypt

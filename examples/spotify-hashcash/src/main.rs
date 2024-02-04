@@ -52,8 +52,8 @@ fn main() {
     lib.add_dependency("libdl.so", None);
     lib.add_dependency("libc.so", None);
     lib.load_dependencies().expect("Failed to load dependencies");
-    lib.override_symbol("memset", Some(nix::libc::memset as *const ()));
-    lib.override_symbol("memcpy", Some(nix::libc::memcpy as *const ()));
+    lib.override_symbol("memset", Some(libc::memset as *const ()));
+    lib.override_symbol("memcpy", Some(libc::memcpy as *const ()));
     lib.initialize();
 
     #[cfg(target_arch = "x86_64")]
