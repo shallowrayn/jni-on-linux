@@ -20,6 +20,8 @@ use elf::{
 use log::{debug, error, info, trace};
 use thiserror::Error;
 
+#[cfg(feature = "inline-asm")]
+mod dlfcn;
 mod locate;
 mod mmap;
 #[cfg(feature = "inline-asm")]
@@ -40,9 +42,13 @@ pub struct JNI {
     looking_for_symbol: bool,
     #[cfg(feature = "inline-asm")]
     plt_data: Option<plt::PltData>,
+    #[cfg(feature = "inline-asm")]
+    dlopen: Option<dlfcn::DlopenSymbols>,
+    #[cfg(feature = "inline-asm")]
+    dlopen_dependencies: HashMap<String, Option<Arc<Mutex<Box<JNI>>>>>,
 }
 
-const UNDEFINED_SYMBOL_VALUE: usize = 0xBABECAFE;
+pub(crate) const UNDEFINED_SYMBOL_VALUE: usize = 0xBABECAFE;
 const STN_UNDEF: u64 = 0; // Undefined symbol
 
 impl JNI {
@@ -99,6 +105,8 @@ impl JNI {
                 symbol_overrides: HashMap::new(),
                 looking_for_symbol: false,
                 plt_data: None,
+                dlopen: None,
+                dlopen_dependencies: HashMap::new(),
             });
             let jni_addr = &mut *jni as *mut JNI;
             jni.plt_data = Some(plt::PltData::new(jni_addr));
@@ -198,6 +206,79 @@ impl JNI {
 
     pub fn get_offset(&self, offset: usize) -> usize {
         self.mapping.base + offset - self.base_virtual_address
+    }
+
+    #[cfg(feature = "inline-asm")]
+    pub fn enable_dlopen(&mut self) -> Result<(), Error> {
+        let dlopen_symbols = dlfcn::DlopenSymbols::new(self.plt_data.as_ref().unwrap().jni)?;
+        self.override_symbol("dlopen", Some(dlopen_symbols.dlopen));
+        self.override_symbol("dlsym", Some(dlopen_symbols.dlsym));
+        self.override_symbol("dlclose", Some(dlopen_symbols.dlclose));
+        self.dlopen = Some(dlopen_symbols);
+        Ok(())
+    }
+
+    #[cfg(feature = "inline-asm")]
+    pub fn add_dlopen_dependency(&mut self, name: &str, lib: Option<Box<JNI>>) {
+        self.dlopen_dependencies.insert(name.to_string(), lib.map(Mutex::new).map(Arc::new));
+    }
+
+    #[cfg(feature = "inline-asm")]
+    pub fn add_dlopen_shared_dependency(&mut self, name: &str, lib: Option<Arc<Mutex<Box<JNI>>>>) {
+        self.dlopen_dependencies.insert(name.to_string(), lib);
+    }
+
+    #[cfg(feature = "inline-asm")]
+    pub(crate) fn dlopen(&mut self, filename: &str, flags: i32) -> Option<*const JNI> {
+        debug!(target: &self.name, r#"dlopen("{filename}", {flags})"#);
+
+        if !self.dlopen_dependencies.contains_key(filename) {
+            let mut file_path = std::path::PathBuf::from(filename);
+            if !file_path.exists() {
+                file_path = locate::locate_library(filename, None)?;
+            }
+            let lib = JNI::new(file_path).ok()?;
+            self.add_dependency(filename, Some(lib));
+        }
+
+        let lib = self.dlopen_dependencies.get(filename)?;
+        match lib {
+            Some(lib) => {
+                let lib = lib.lock().ok()?;
+                Some(&**lib as *const JNI)
+            },
+            None => None,
+        }
+    }
+
+    #[cfg(feature = "inline-asm")]
+    pub(crate) fn dlsym(&mut self, handle: &mut JNI, symbol: &str) -> Option<usize> {
+        #[cfg(target_pointer_width = "64")]
+        debug!(target: &self.name, r#"dlsym({:#018x} ({}), "{symbol}")"#, handle.mapping.base, handle.name);
+        #[cfg(not(target_pointer_width = "64"))]
+        debug!(target: &self.name, r#"dlsym({:#010x} ({}), "{symbol}")"#, handle.mapping.base, handle.name);
+        let local_symbol = handle.find_local_symbol_by_name(symbol, true)?;
+        if local_symbol.address.is_some() {
+            return local_symbol.address;
+        }
+        if local_symbol.value != 0 {
+            return Some(self.get_offset(local_symbol.value as usize));
+        }
+        let symbol_name = local_symbol.name?;
+        let global_symbol = self.find_global_symbol(&symbol_name, true)?;
+        if global_symbol.address.is_some() {
+            return global_symbol.address;
+        }
+        match global_symbol.value {
+            0 => None,
+            value => Some(self.get_offset(value as usize)),
+        }
+    }
+
+    #[cfg(feature = "inline-asm")]
+    pub(crate) fn dlclose(&mut self, handle: &mut JNI) -> i32 {
+        debug!(target: &self.name, r#"dlclose("{}")"#, handle.name);
+        0
     }
 
     pub fn initialize(&mut self) {
@@ -463,7 +544,7 @@ impl JNI {
             }
         }
 
-        // TODO: Should be loop through our symbols using strcmp? It would be slow, but performance isn't a priority
+        // TODO: Should we loop through our symbols using strcmp? It would be slow, but performance isn't a priority
 
         None
     }

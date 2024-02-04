@@ -8,7 +8,7 @@ use super::JNI;
 
 #[repr(C)]
 pub struct PltData {
-    jni: *mut JNI,
+    pub jni: *mut JNI,
     plt_callback: unsafe extern "C" fn(jni: *mut JNI, reloc_index: usize) -> usize,
 }
 
