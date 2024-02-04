@@ -12,7 +12,6 @@ fn main() {
         .arg("-fPIC")
         .arg("src/wrapper.c")
         .args(["-o", "libwrapper.so"])
-        .arg("-ldl")
         .output()
         .expect("Failed to compile libstore");
 }

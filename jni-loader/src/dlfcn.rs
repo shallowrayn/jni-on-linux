@@ -1,4 +1,5 @@
 #[cfg_attr(target_arch = "x86_64", path = "dlfcn/x86_64.rs")]
+#[cfg_attr(target_arch = "aarch64", path = "dlfcn/aarch64.rs")]
 mod asm;
 use std::{
     ffi::{c_char, c_int, c_void, CStr},

@@ -6,12 +6,12 @@ pub unsafe extern "C" fn jni_dlfcn_trampoline() {
     asm!(
         ".quad 0x0102030405060708", // JNI*
         ".quad 0x0807060504030201", // Function pointer
-        "mov r8, [rip-23]",         // Get JNI*
-        "mov r9, [rip-22]",         // Get function pointer
-        "mov rdx, rsi",             // Move args[1] to args[2]
-        "mov rsi, rdi",             // Move args[0] to args[1]
-        "mov rdi, r8",              // Move JNI* into args[0]
-        "jmp r9",
+        "ldr x7, -16",              // Get JNI*
+        "ldr x8, -12",              // Get function pointer
+        "mov x2, x1",               // Move args[1] to args[2]
+        "mov x1, x0",               // Move args[0] to args[1]
+        "mov x0, x7",               // Move JNI* into args[0]
+        "br x8",
         options(noreturn)
     )
 }
