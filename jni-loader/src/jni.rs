@@ -14,7 +14,7 @@ use elf::{
     symbol::Symbol,
     ElfStream,
 };
-use log::{debug, info, trace};
+use log::{debug, error, info, trace};
 use thiserror::Error;
 
 #[cfg(feature = "inline-asm")]
@@ -501,7 +501,14 @@ impl JNI {
         let relocation_offset = relocation_offset?;
         let relocation_addend = relocation_addend?;
         let relocation_symbol = relocation_symbol?;
-        let symbol_addr = self.resolve_plt_symbol(relocation_symbol)?;
+        debug!(target: &self.name, "PLT relocation {reloc_index} is for symbol {relocation_symbol}");
+        let symbol_addr = match self.resolve_plt_symbol(relocation_symbol) {
+            Some(symbol) => Some(symbol),
+            None => {
+                error!(target: &self.name, "Failed to resolve PLT symbol {relocation_symbol}. We are probably about to crash");
+                None
+            },
+        }?;
         let target_addr = self.get_offset(relocation_offset);
         let target_value = add_addend(symbol_addr, relocation_addend);
         #[cfg(target_pointer_width = "64")]
@@ -514,6 +521,9 @@ impl JNI {
 
     fn resolve_plt_symbol(&mut self, symbol_idx: u32) -> Option<usize> {
         let local_symbol = self.find_local_symbol_by_index(symbol_idx, true)?;
+        if let Some(ref local_symbol_name) = local_symbol.name {
+            debug!(target: &self.name, "Found name '{local_symbol_name}' for PLT symbol {symbol_idx}");
+        }
         if local_symbol.address.is_some() {
             return local_symbol.address;
         }
