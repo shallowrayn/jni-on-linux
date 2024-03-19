@@ -33,7 +33,7 @@ fn main() -> Result<()> {
     let data_arr = env.byte_array_from_slice(&data)?;
 
     // https://drive.proton.me/urls/YM24QKY1B4#szA57GF5lUZd
-    let lib_path = env::current_dir().unwrap().join("libEncryptor.so");
+    let lib_path = env::current_dir()?.join("examples").join("ttencrypt").join("libEncryptor.so");
     let mut lib = JNI::new(lib_path)?;
     lib.add_dependency("liblog.so", None);
     lib.add_dependency("libc.so", None);

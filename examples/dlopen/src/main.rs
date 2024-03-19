@@ -2,7 +2,7 @@ use anyhow::Result;
 use jni_loader::JNI;
 
 fn load_wrapper() -> Result<Box<JNI>> {
-    let current_path = std::env::current_dir()?;
+    let current_path = std::env::current_dir()?.join("examples").join("dlopen");
 
     let store_path = current_path.clone().join("libstore.so");
     let mut store = JNI::new(store_path)?;

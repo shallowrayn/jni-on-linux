@@ -1,5 +1,4 @@
 [workspace]
 members = ["jni-loader", "examples/*"]
-default-members = ["jni-loader"]
 
 resolver = "2"

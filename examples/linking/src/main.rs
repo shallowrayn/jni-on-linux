@@ -12,7 +12,7 @@ fn main() -> Result<()> {
         env::set_var("RUST_LOG", "debug")
     }
     env_logger::init();
-    let current_dir = env::current_dir()?;
+    let current_dir = env::current_dir()?.join("examples").join("linking");
     let lib_math_path = current_dir.clone().join("libmath.so");
     let lib_power_path = current_dir.clone().join("libpower.so");
 

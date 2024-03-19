@@ -2,6 +2,11 @@
 name = "linking"
 version = "0.1.0"
 edition = "2021"
+autobins = false
+
+[[example]]
+name = "linking"
+path = "src/main.rs"
 
 [dependencies]
 jni-loader = { path = "../../jni-loader" }

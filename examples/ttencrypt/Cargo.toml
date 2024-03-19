@@ -2,6 +2,11 @@
 name = "ttencrypt"
 version = "0.1.0"
 edition = "2021"
+autobins = false
+
+[[example]]
+name = "ttencrypt"
+path = "src/main.rs"
 
 [dependencies]
 # TODO: libEncryptor.so doesn't have a .got.plt section
