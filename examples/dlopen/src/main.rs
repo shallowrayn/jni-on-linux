@@ -8,7 +8,7 @@ fn load_wrapper() -> Result<Box<JNI>> {
     let mut store = JNI::new(store_path)?;
     store.add_dependency("libc.so.6", None);
     store.load_dependencies()?;
-    store.initialize();
+    store.initialize()?;
 
     let wrapper_path = current_path.clone().join("libwrapper.so");
     let mut wrapper = JNI::new(wrapper_path)?;
@@ -17,7 +17,7 @@ fn load_wrapper() -> Result<Box<JNI>> {
     wrapper.load_dependencies()?;
     wrapper.override_symbol("printf", Some(libc::printf as *const ()));
     wrapper.enable_dlopen()?;
-    wrapper.initialize();
+    wrapper.initialize()?;
     Ok(wrapper)
 }
 

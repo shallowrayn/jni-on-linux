@@ -13,3 +13,4 @@ jni-loader = { path = "../../jni-loader" }
 hex = "0.4.3"
 env_logger = "0.11.1"
 libc = "0.2.153"
+anyhow = "1.0.81"

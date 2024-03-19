@@ -19,14 +19,14 @@ fn main() -> Result<()> {
     let mut lib_math = JNI::new(lib_math_path)?;
     lib_math.add_dependency("libc.so.6", None);
     lib_math.load_dependencies()?;
-    lib_math.initialize();
+    lib_math.initialize()?;
 
     let mut lib_power = JNI::new(lib_power_path)?;
     lib_power.add_dependency("libc.so.6", None);
     lib_power.add_dependency("libmath.so", Some(lib_math));
     lib_power.load_dependencies()?;
     lib_power.override_symbol("m_cube", Some(m_cube as *const ()));
-    lib_power.initialize();
+    lib_power.initialize()?;
 
     let (test_libpower, _) = lib_power.get_symbol("test_libpower").unwrap();
     let test_libpower: extern "C" fn() -> std::ffi::c_int = unsafe { std::mem::transmute(test_libpower) };

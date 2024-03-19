@@ -281,9 +281,9 @@ impl JNI {
         0
     }
 
-    pub fn initialize(&mut self) {
+    pub fn initialize(&mut self) -> Result<(), Error> {
         if self.have_been_initialized {
-            return;
+            return Ok(());
         }
         self.have_been_initialized = true;
         debug!(target: &self.name, "Initializing");
@@ -295,7 +295,7 @@ impl JNI {
                 // If A depends on B and A and B both depend on C, C's lock will be released before B::initialize()
                 let mut dependency = dependency.lock().unwrap();
                 debug!(target: &self.name, "Initializing dependency {}", dependency.name);
-                dependency.initialize();
+                dependency.initialize()?;
             }
         }
 
@@ -452,6 +452,7 @@ impl JNI {
         }
 
         debug!(target: &self.name, "Initialized");
+        Ok(())
     }
 
     // Look for a local symbol using its index
@@ -754,4 +755,6 @@ pub enum Error {
     MemoryMapFailed(String),
     #[error("failed to find .dynamic section")]
     NoDyanmicSection,
+    #[error("Failed to parse elf file: {0}")]
+    ElfError(#[from] elf::ParseError),
 }

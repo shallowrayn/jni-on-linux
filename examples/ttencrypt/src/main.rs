@@ -48,7 +48,7 @@ fn main() -> Result<()> {
     lib.override_symbol("memcpy", Some(libc::memcpy as *const ()));
     lib.override_symbol("memset", Some(libc::memset as *const ()));
     lib.override_symbol("free", Some(libc::free as *const ()));
-    lib.initialize();
+    lib.initialize()?;
 
     let tt_encrypt: TTEncrypt = unsafe { std::mem::transmute(lib.get_offset(0x7d8c)) };
     let encrypted = tt_encrypt(env.get_raw(), std::ptr::null_mut(), data_arr.as_raw(), data.len() as i32);
