@@ -8,9 +8,6 @@ extern "C" fn m_cube(x: c_int) -> c_int {
 }
 
 fn main() -> Result<()> {
-    if env::var("RUST_LOG").is_err() {
-        env::set_var("RUST_LOG", "debug")
-    }
     env_logger::init();
     let current_dir = env::current_dir()?.join("examples").join("linking");
     let lib_math_path = current_dir.clone().join("libmath.so");
