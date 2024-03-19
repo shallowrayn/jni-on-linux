@@ -9,7 +9,6 @@ name = "ttencrypt"
 path = "src/main.rs"
 
 [dependencies]
-# TODO: libEncryptor.so doesn't have a .got.plt section
 jni-loader = { path = "../../jni-loader", default-features = false }
 jni = { version = "0.21.1", features = ["invocation"] }
 hex = "0.4.3"

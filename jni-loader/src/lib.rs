@@ -324,8 +324,10 @@ impl JNI {
             }
         }
         // Without inline assembly we don't have a PLT trampoline. Resolve all PLT entries now
-        #[cfg(not(feature = "inline-asm"))]
-        {
+        // Some binaries may have a .plt section but no .got.plt as all entries are in the .got.
+        // In that case resolve all entries now as well
+        let got_plt_header = self.elf_file.section_header_by_name(".got.plt")?.copied();
+        if !cfg!(feature = "inline-asm") || got_plt_header.is_none() {
             if let Ok(Some(&rel_plt_header)) = self.elf_file.section_header_by_name(".rel.plt") {
                 if let Ok(rel_plt) = self.elf_file.section_data_as_rels(&rel_plt_header) {
                     let old_len = relocations.len();
@@ -421,7 +423,7 @@ impl JNI {
 
         // Set up the PLT handler if needed
         #[cfg(feature = "inline-asm")]
-        if let Ok(Some(&got_plt_header)) = self.elf_file.section_header_by_name(".got.plt") {
+        if let Some(got_plt_header) = got_plt_header {
             let got_entry_count = got_plt_header.sh_size as usize / std::mem::size_of::<usize>();
             let got_plt_addr = self.get_offset(got_plt_header.sh_addr as usize);
             let plt_0 = 0xCAFEBABE;
