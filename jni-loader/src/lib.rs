@@ -328,18 +328,23 @@ impl JNI {
         // In that case resolve all entries now as well
         let got_plt_header = self.elf_file.section_header_by_name(".got.plt")?.copied();
         if !cfg!(feature = "inline-asm") || got_plt_header.is_none() {
+            let cause = if got_plt_header.is_some() {
+                "Assembly disabled"
+            } else {
+                "No .got.plt section"
+            };
             if let Ok(Some(&rel_plt_header)) = self.elf_file.section_header_by_name(".rel.plt") {
                 if let Ok(rel_plt) = self.elf_file.section_data_as_rels(&rel_plt_header) {
                     let old_len = relocations.len();
                     relocations.extend(rel_plt.map(Relocation::from));
-                    debug!(target: &self.name, "Assembly disabled, added {} relocations from .rel.plt", relocations.len() - old_len);
+                    debug!(target: &self.name, "{cause}, added {} relocations from .rel.plt", relocations.len() - old_len);
                 }
             }
             if let Ok(Some(&rela_plt_header)) = self.elf_file.section_header_by_name(".rela.plt") {
                 if let Ok(rela_plt) = self.elf_file.section_data_as_relas(&rela_plt_header) {
                     let old_len = relocations.len();
                     relocations.extend(rela_plt.map(Relocation::from));
-                    debug!(target: &self.name, "Assembly disabled, added {} relocations from .rela.plt", relocations.len() - old_len);
+                    debug!(target: &self.name, "{cause}, added {} relocations from .rela.plt", relocations.len() - old_len);
                 }
             }
         }
