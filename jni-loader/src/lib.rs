@@ -33,7 +33,7 @@ pub struct JNI {
     path: PathBuf,
     name: String,
     elf_file: ElfStream<AnyEndian, File>,
-    mapping: MemoryMapping,
+    pub mapping: MemoryMapping,
     base_virtual_address: usize, // Lowest PT_LOAD virtual address
     dependencies: HashMap<String, Option<Arc<Mutex<Box<JNI>>>>>,
     loaded_dependencies: bool,
