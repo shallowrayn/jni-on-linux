@@ -20,6 +20,7 @@ use elf::{
 use log::{debug, error, info, trace};
 use thiserror::Error;
 
+mod debug;
 #[cfg(feature = "inline-asm")]
 mod dlfcn;
 mod locate;
@@ -75,6 +76,7 @@ impl JNI {
             Err(error) => return Err(Error::MemoryMapFailed(error)),
         };
         let base_virtual_address = elf_file.segments().iter().find(|&s| s.p_type == PT_LOAD).unwrap().p_vaddr as usize;
+        debug::add_library(mapping.base as u64, &name).map_err(Error::DebugEntry)?;
 
         #[cfg(not(feature = "inline-asm"))]
         {
@@ -659,6 +661,12 @@ impl JNI {
     }
 }
 
+impl Drop for JNI {
+    fn drop(&mut self) {
+        debug::remove_library(self.mapping.base as u64);
+    }
+}
+
 struct Relocation {
     offset: usize,
     rel_type: u32,
@@ -762,6 +770,8 @@ pub enum Error {
     MemoryMapFailed(String),
     #[error("failed to find .dynamic section")]
     NoDyanmicSection,
-    #[error("Failed to parse elf file: {0}")]
+    #[error("failed to parse elf file: {0}")]
     ElfError(#[from] elf::ParseError),
+    #[error("failed to add debug entry")]
+    DebugEntry(std::ffi::NulError),
 }
